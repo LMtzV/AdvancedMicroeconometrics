@@ -1,0 +1,11 @@
+name: Publish Document
+title:
+username:
+account: rpubs
+server: rpubs.com
+hostUrl: rpubs.com
+appId: https://api.rpubs.com/api/v1/document/870133/ba692c4f90484b16b0d7b6abc63854e7
+bundleId: https://api.rpubs.com/api/v1/document/870133/ba692c4f90484b16b0d7b6abc63854e7
+url: http://rpubs.com/LMtzV/870133
+when: 1645673896.38351
+lastSyncTime: 1645673896.38353
