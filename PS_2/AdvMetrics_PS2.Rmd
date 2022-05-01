@@ -1,0 +1,737 @@
+---
+title: 'Advanced Microeconometrics: Problem Set 2'
+author: "Luis Martínez Valdés"
+date: "Spring 2022"
+output:
+  html_document:
+    df_print: paged
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+
+```{r setup, include=FALSE}
+library(FactoMineR)
+library(factoextra)
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(ggthemes)
+library(stringr)
+library(tidyr)
+library(tidyverse)
+library(viridis)
+library(rmutil)
+library(STAR)
+library(statmod)
+library(invgamma)
+library(gtools)
+library(mvtnorm)
+library(matrixStats)
+library(ggpubr)
+library(functional)
+library(tseries)
+library(zoo)
+library(forecast)
+library(astsa)
+library(MLmetrics)
+library(tframePlus)
+library(bestNormalize)
+library(lmtest)
+library(knitr)
+```
+This set of questions is inspired by Rau, Sánchez and Urzúa (2019). The
+file \textit{data.csv} contains real data for Chilean individuals, that
+track their schooling and labor market decisions and outcomes from their
+early teens through their late twenties.
+
+The goal is to estimate a generalized Roy model for the decision to
+attend a private high school in lieu of a public high school, and labor
+market outcomes, i.e. wages. The model includes an unobserved factor
+that approximates a combination of individuals' scholastic abilities.
+
+A description of the variables in the data is as follows:
+
+```{=tex}
+\begin{itemize}
+    \item \textit{test\_X} is students' performance on standardized test X. The unit measure is standard deviations.
+    \item \textit{privateHS} is a dummy indicating having attended a private high school.
+    \item \textit{wage} is the natural log of wage.
+    \item \textit{male}, \textit{momschoolingX}, \textit{dadschoolingX}, \textit{broken\_homeX}, \textit{incomehhX}, \textit{north}, \textit{center} are demographic variables.
+    \item \textit{share\_private} and \textit{avg\_price} are instruments for the decision of attending a private high school, and denote the local share of private high schools and the average fees local private high schools charge.
+\end{itemize}
+```
+Formally, the model includes potential outcomes as follows,
+\begin{eqnarray*}
+    Y_{1} & = & X\beta_1 + \theta\alpha_1 + U_{1} \\
+    Y_{0} &=& X\beta_0 + \theta\alpha_0 + U_{0} ,
+    \end{eqnarray*}
+
+where $Y_1$ is the potential outcome (i.e. wages) in the counterfactual
+of attending a private high school, and $Y_0$ is similarly defined for
+the counterfactual of attending a public high school. All relevant
+observable demographics are included in $X$, while $\theta$ is the
+unobserved one-dimensional factor (i.e. ability) determining labor
+market outcomes. The unobserved factor is normally distributed with mean
+zero and standard deviation $\sigma_\theta$. The terms $U_1$ and $U_0$
+are idiosyncratic error terms, that are normally distributed with mean
+zero and standard deviations $\sigma_1$ and $\sigma_0$, respectively.
+
+Individuals decide whether or not to attend a private high school based
+on a latent variable $I$: \begin{eqnarray*}
+    I &=&Z\gamma + \theta\alpha_I + V , 
+    \end{eqnarray*} where $Z$ include observable demographics and
+instruments, and $V$ is an idiosyncratic error term with zero mean and
+unit variance. Note that the unobservable factor is also present in this
+part of the model. We can thus define a binary variable $D$ indicating
+treatment status, 
+```{=tex}
+
+\begin{eqnarray*}
+    D &=&\mathbb{I}\Big[ I \geq 0 \Big].
+    \end{eqnarray*}
+````
+
+The model includes a measurement system, that helps with the
+identification of the distribution of $\theta$. Specifically,
+\begin{eqnarray*}
+    T_k &=&W\omega_k + \theta\alpha_{T_k} + \varepsilon_k \quad\quad \mbox{ for each } k=1,2,3,4 , 
+    \end{eqnarray*} where $T_k$ is test score $k$, $W$ include
+demographics determining test scores, and $\varepsilon_k$ is a normally
+distributed error term with mean zero and standard deviation
+$\sigma_{\varepsilon_k}$.
+
+Finally, we assume that the error terms in the model are all independent
+from each other conditioning on the observables and the unobserved
+factor, i.e.
+$U_1 \perp\!\!\!\perp U_0 \perp\!\!\!\perp V \perp\!\!\!\perp \varepsilon \mid X, Z, W, \theta$, and
+$\theta$ is independent of all observables.
+
+For the empirical implementation of the model, in $X$ include
+\textit{male}, \textit{north}, and \textit{center}. In $Z$ include all
+variables in $X$ plus \textit{share\_private} and \textit{avg\_price}.
+In $W$ include \textit{male}, \textit{momschoolingX},
+\textit{dadschoolingX}, \textit{broken\_homeX}, \textit{incomehhX},
+\textit{north}, and \textit{center}. The outcome variable is
+\textit{wage}. $D$ is \textit{privateHS}. And, the measurement system is
+comprised by the four test scores \textit{test\_X}.
+
+```{r}
+# Reading data
+data <- read.csv('/Volumes/External/AdvMicroEconMetrics/PS_2/data_ps2.csv')
+
+# X (Standarized Test)
+X <- data[names(data) %in% c('male', 'north', 'center')]
+
+# Z (Observable demographics and instruments)
+Z <- data[names(data) %in% c('male', 'north', 'center', 'share_private',
+                             'avg_price')]
+
+# W (demographics determining test scores)
+
+W <- data[names(data) %in% c('male', 'momschooling2', 'momschooling3',
+                             'momschooling_miss','dadschooling2',
+                             'dadschooling3', 'dadschooling_miss',
+                             'broken_home1', 'broken_home_miss', 
+                             'incomehh2', 'incomehh3', 'incomehh_miss', 
+                             'north', 'center')]
+# D (Treatment Status)
+D <- data[names(data) %in% c('privateHS')]
+
+# Y (Model)
+Y <- data[names(data) %in% c('wage')]
+
+
+```
+
+
+# 1.
+Normalize $\alpha_{T_1}=1$. Discuss and show a sketch of identification of the remaining loadings in the measurement system (i.e. $\alpha_{T_2}$, $\alpha_{T_3}$, $\alpha_{T_4}$) and of the distribution of $\theta$. Why do we need to assume that one of the loadings in the measurement system is equal to one?
+
+## Answer
+
+Following the line of thought in Heckman, et al. (2003) and taking into account that we have four test scores ($T_{1}$,$T_{2}$, $T_{3}$, $T_{4}$ ) available. We have, 
+
+$$
+\begin{aligned}
+    T_{i}= W \omega_{k} + \alpha_{T_{i}} \theta + \varepsilon_{T_{i}}~~\forall~~i=1,~..~, 4
+\end{aligned}
+$$
+
+Then,assuming independence between demographic determining scores we can get rid of the $W \omega_{k}$ components when computing the covariances. Thus,
+
+$$
+\begin{aligned}
+    & Cov(T_{1},T_{2})= \alpha_{T_{1}} \alpha_{T_{2}}\sigma^{2}_{\theta} \\
+    & Cov(T_{1},T_{3})= \alpha_{T_{1}} \alpha_{T_{3}}\sigma^{2}_{\theta} \\
+    & Cov(T_{1},T_{4})= \alpha_{T_{1}} \alpha_{T_{4}}\sigma^{2}_{\theta} \\
+    & Cov(T_{2},T_{3})= \alpha_{T_{2}} \alpha_{T_{3}}\sigma^{2}_{\theta} \\
+    & Cov(T_{2},T_{4})= \alpha_{T_{2}} \alpha_{T_{4}}\sigma^{2}_{\theta} \\
+    & Cov(T_{3},T_{4})= \alpha_{T_{3}} \alpha_{T_{4}}\sigma^{2}_{\theta} \\
+\end{aligned}
+$$
+
+
+Taking the left hand side, we have that, 
+
+$$
+\begin{aligned}
+    & \frac{Cov(T_{2},T_{4})}{Cov(T_{1},T_{4})}= \frac{\alpha_{T_{2}}}{\alpha_{T_{1}}}\\
+    & \frac{Cov(T_{2},T_{3})}{Cov(T_{1},T_{2})}= \frac{\alpha_{T_{3}}}{\alpha_{T_{1}}}\\
+    & \frac{Cov(T_{2},T_{4})}{Cov(T_{1},T_{2})}= \frac{\alpha_{T_{4}}}{\alpha_{T_{1}}}\\
+\end{aligned}
+$$
+
+
+As we are normalizing $\alpha_{T_{1}}=1$, we can obtain the values for the rest of the loaings in the measuring system, such as
+
+
+$$
+\begin{aligned}
+    & \frac{T_{i}}{\alpha_{T_{i}}}= \theta + \frac{\varepsilon_{T_{i}}}{\alpha_{T_{i}}}= \theta +  \varepsilon^{*}_{T_{i}}~~\forall~~i=1,~..~, 4
+\end{aligned}
+$$
+
+
+where $\varepsilon^{*}_{T_{i}}= \varepsilon_{T_{i}} / \alpha_{T_{i}}$. Thus, we can compute the densities (using Kotlarski's Theorem) for $\varepsilon_{T_{i}}~~\forall~~i=2,3,4$ and $\theta$. On the other hand, assuming zero normal distributions for the error terms, and approximating the distribution of the factor using a mixture of two normal distributions using simulated entries for the parameters. That is, 
+
+$$
+\begin{aligned}
+    \theta &=& p \mathcal{N}(\mu_{1},\sigma^{2}_{1}) + (1-p)\mathcal{N}(\mu_{2},\sigma^{2}_{2})
+\end{aligned}
+$$
+
+Therefore, 
+
+```{r}
+set.seed(180618)
+# Approximate Theta
+sims<- length(data$test_lect)
+p<- runif(sims,0,1)
+mu1<- runif(1); mu2<- runif(1)-1
+var1<- runif(1,1,2); var2<- runif(1,2,3)
+N1<- rnorm(sims,mu1,var1); N2<- rnorm(sims,mu2, var2)
+
+th<- p * N1 + (1-p) * N2
+
+# Create new data frame
+T1<- data$test_lect
+T2<- data$test_mate
+T3<- data$test_soc
+T4<- data$test_nat
+
+
+
+# Calculate remaining loadings
+(alpha_T1<- 1)
+(alpha_T2<- cov(T2,T4) / cov(T1,T4))
+(alpha_T3<- cov(T2,T3) / cov(T1,T2))
+(alpha_T4<- cov(T2,T4) / cov(T1,T2))
+
+# Calculate densities 
+vareps_T2<- (T2 / alpha_T2) - th
+vareps_T3<- (T3 / alpha_T3) - th
+vareps_T4<- (T4 / alpha_T4) - th
+
+# Generating new data frame
+newdata<- cbind(th, vareps_T2, vareps_T3, vareps_T4) %>% as.data.frame()
+
+colours <-
+  c(
+    'Theta' = 'purple1',
+    'Math Scores' = 'tomato',
+    'Soc Scores' = 'dodgerblue3',
+    'Nat Scores' = 'black'
+  )
+
+
+ggplot(newdata) +
+    geom_density(aes(x = th, y = ..density.. ,
+                 colour = 'Theta'),linetype=2)+
+    geom_density(aes(x = vareps_T2, y = ..density.. ,
+                 colour = 'Math Scores'))+
+  geom_density(aes(x = vareps_T3, y = ..density..,
+                 colour = 'Soc Scores'))+
+   geom_density(aes(x = vareps_T4, y = ..density..,
+                 colour = 'Nat Scores'))+
+  labs(
+        title = 'Distribution of Test Scores by Subject',
+        x = 'Scores',
+        y = NULL
+        )+
+  scale_colour_manual(name = 'Scores', values = colours)+
+  theme_minimal()
+```
+
+Finallly, the assumption that one of the loadings in the measuring system is equal to one is necessary in order to compute the other ones; otherwise, the system of equations wouldn't have a solution, as you have more unknowns than equations. 
+
+
+# 2. 
+Run an OLS regression of $Y$ ($=DY_1 + (1-D)Y_0$) on $D$ and $X$. Show your results. Are they biased? Why?
+
+
+
+## Answer
+
+
+```{r}
+# Implementing OLS regression of Y on D and X we have 
+
+model_OLS<- lm(wage ~ male + north + center + privateHS, data = data)
+summary(model_OLS)
+
+
+# Another Way: Simulating all parameters, using multiple linear regression and 
+# estimating model
+set.seed(180618)
+alpha0<- runif(1); alpha1<- runif(1); beta0<- runif(1); beta1<- runif(1)
+sigma1<- runif(1)
+sigma2<- runif(1)
+U0<- rnorm(sims, 0, sigma1)
+U1<- rnorm(sims, 0, sigma2)
+V<- rnorm(sims, 0, 1)
+
+Z.matrix <- as.matrix.data.frame(Z)
+X.matrix<- as.matrix.data.frame(X)
+Gamma<- runif(5) %>% as.matrix()
+
+#Using normalized loading in order to simplify instruments
+I<- (Z.matrix %*% Gamma) + th * alpha_T1 + V
+D.prime<- ifelse(I >= 0, 1,0) %>% as.matrix.data.frame()
+
+#Generate Potential Outcomes
+Y1<- X * beta1 + th * alpha1 + U1 %>% as.matrix()
+Y0<- X * beta0 + th * alpha0 + U0 %>% as.matrix()
+
+
+#Generate Y= DY1 + (1-D)Y0
+Y.prime<- D.prime * Y1 + (1 - D.prime) * Y0
+y.prime<- as.matrix.data.frame(Y.prime)
+
+
+(OLS_X<- solve(t(X.matrix) %*% X.matrix) %*% t(X.matrix) %*% y.prime)
+(OLS_D<- solve(t(D.prime) %*% D.prime) %*% t(D.prime) %*% y.prime)
+
+```
+
+We know that OLS  estimators are BLUEs (Best Unbiased Linear Estimators) therefore, we would expect that our fitted model coefficients are unbiased. Now this is true every time the assumptions are upheld; however, there is a clear endogeinity problem in our case, as our error terms contain part of the 'unobserved abilities'.
+
+Note* : Our estimations using simulated data differ in some manner (~10%) from the fitted model. Why? This is actually an interesting question: As we simulate, we lose efficiency and accuracy, which we can directly obtain from the data. This is actually part of the endogeinity problem mentioned earlier, when we simulate the parameters ($\alpha_{i}, beta_{i}, U_{i}, V$) we are not internalizing the unobserved abilities in error terms (losing data). 
+
+
+# 3. 
+Using $Z$ as instruments, estimate by 2SLS the ``effect'' of $D$ on $Y$. Show and comment your results.
+
+## Answer
+
+```{r}
+# First Stage: Estimate D using Z as instrument
+D.matrix<- as.matrix.data.frame(D)
+D.hat<- Z.matrix %*% solve(t(Z.matrix) %*% Z.matrix) %*% t(Z.matrix) %*% 
+        D.matrix
+
+data_2sls<- cbind.data.frame(data,D.hat)
+#Second Stage: Run regression on X and D.hat
+s2_2sls<- lm(wage ~ D.hat, data = data_2sls)
+summary(s2_2sls)
+```
+
+To see the effects more clearly, 
+
+```{r}
+# Filter out wage by treated and utreated
+wage.treated<- data %>% filter(privateHS == 1) %>% pull(wage) %>% 
+               as.data.frame()
+colnames(wage.treated)<- c('Wage_With_PrivateHS')
+
+wage.untreated<- data %>% filter(privateHS == 0) %>% pull(wage) %>% 
+                 as.data.frame()
+colnames(wage.untreated)<- c('Wage_WithNo_PrivateHS')
+
+linetypes<- c(
+  'Wage_With_PrivateHS' = 1,
+  'Wage_WithNo_PrivateHS' = 2 
+)
+ggplot()+
+  geom_density(data= wage.treated, aes(x=Wage_With_PrivateHS, y= ..density..,
+               linetype = 'Wage_With_PrivateHS'))+
+  geom_density(data= wage.untreated, aes(x=Wage_WithNo_PrivateHS, 
+                                         y= ..density.., 
+              linetype= 'Wage_WithNo_PrivateHS' ))+
+  labs(
+        title = 'PrivateHS effects on Wages',
+        x = 'Wages',
+        y = NULL
+        )+
+  theme_minimal()
+```
+
+# 4. 
+Now, run your OLS regression in 2. but adding $T_1$--$T_4$ as additional controls. What is the effect of $D$ on $Y$?
+
+## Answer
+
+```{r}
+data_q4<- data
+colnames(data_q4)[c(1,2,3,4)]<- c('T1', 'T2', 'T3', 'T4')
+
+# Implementing OLS regression of Y on D and X we have 
+
+model_OLS_Q4<- lm(wage ~ T1 + T2 + T3 + T4 + male + north + center + privateHS, 
+               data = data_q4)
+summary(model_OLS_Q4)
+
+```
+
+
+Now, it is interesting to see that when we add test scores as controls, -privateHS- estimate decreases significantly, this means the correlation between schooling level (treatment) and wages flattens. As to the effect, it seems that unobserved factor plays a more important role in determining the level of earning an individual will have. Thus, the effect of $D$ on $Y$ has less impact in this case. If we were to replicate the effect graphic like in the previous question, the dashed line would shift to the right, closing in to the solid one. 
+
+
+# 5. 
+Define the MTE, ATE, and TT parameters in this framework.
+
+## Answer
+
+* The average treatment effect (ATE) is defined by averaging the treatment gains over the entire student population,
+$$ 
+\begin{aligned}
+  ATE &=& \int \int \mathbb{E}\Big[ Y_{1} - Y_{0} | X = x, \theta = \hat{\theta} \Big]dF_{X,\theta}(x,\hat{\theta})
+\end{aligned}
+$$
+
+
+* The treatment effect on the treated (TT) is defined by averaging the treatment gains over the subset of students that actually choose to be treated,
+$$ 
+\begin{aligned}
+  TT &=& \int \int \mathbb{E}\Big[ Y_{1} - Y_{0} | X = x, \theta = \hat{\theta}, D=1 \Big]dF_{X,\theta | D=1}(x,\hat{\theta})
+\end{aligned}
+$$
+
+
+* The marginal treated effect (MTE) is defined by averaging the gain in terms of $Y_{1} - Y_{0}$ for all students who would be indifferent between choosing to be treated or not (i.e.$V = v$ ),
+$$ 
+\begin{aligned}
+  MTE = 
+      & \int \int \mathbb{E}\Big[ Y_{1} - Y_{0} | X = x, \theta = \hat{\theta}, V = v \Big]dF_{X,\theta | V = v}(x,\hat{\theta}) \\=
+      & \int \int \mathbb{E}\Big[ Y_{1} - Y_{0} | X = x, \theta = \hat{\theta}, V = Z'\gamma - \theta \alpha_{I} \Big]dF_{X,\theta | V = Z'\gamma - \theta \alpha_{I}}(x,\hat{\theta})
+\end{aligned}
+$$
+
+
+# 6. 
+Write down the likelihood function of the model, integrating out the factor $\theta$ over its distribution.
+
+## Answer
+
+$$ 
+\begin{aligned}
+  \mathcal{L} = 
+      & \Pi_{i=1}^{N} \int f(Y_{i},D_{i},T_{i} | Z_{i}, X_{i}, \theta) f(\theta) d(\theta) \\=
+      & \Pi_{i=1}^{N} \int f(Y_{i},D_{i} | Z_{i}, X_{i}, \theta) f(T_{i} | X_{i},\theta) f(\theta) d(\theta) \\=
+      & \Pi_{i=1}^{N} \int\Bigg( \Bigg[\frac{1}{\sigma_{0}\sqrt{2 \pi}} exp\Bigg\{ -\frac{1}{2}\Big( \frac{Y_{0}-x\beta_{0}-\theta \alpha_{0}}{\sigma_{0}}\Big)^{2}\Bigg\} \Bigg]\Bigg[\Phi\Big(\frac{Z\gamma + \theta \alpha_{I}}{\sigma_{I}}\Big)\Bigg] \Bigg)^{1-D}\\
+      & \Bigg( \Bigg[\frac{1}{\sigma_{1}\sqrt{2 \pi}} exp\Bigg\{ -\frac{1}{2}\Big( \frac{Y_{1}-x\beta_{1}-\theta \alpha_{1}}{\sigma_{1}}\Big)^{2}\Bigg\} \Bigg]\Bigg[ 1 - \Phi\Big(\frac{Z\gamma + \theta \alpha_{I}}{\sigma_{I}}\Big)\Bigg] \Bigg)^{D}\\
+      & \Bigg[\frac{1}{\sigma_{T_{1}}\sqrt{2 \pi}} exp\Bigg\{ -\frac{1}{2}\Big( \frac{T_{1}-W\omega_{T_{1}}-\theta \alpha_{T_{1}}}{\sigma_{T_{1}}}\Big)^{2}\Bigg\} \Bigg]\\
+      & \Bigg[\frac{1}{\sigma_{T_{2}}\sqrt{2 \pi}} exp\Bigg\{ -\frac{1}{2}\Big( \frac{T_{2}-W\omega_{T_{2}}-\theta \alpha_{T_{2}}}{\sigma_{T_{2}}}\Big)^{2}\Bigg\} \Bigg]\\
+      & \Bigg[\frac{1}{\sigma_{T_{3}}\sqrt{2 \pi}} exp\Bigg\{ -\frac{1}{2}\Big( \frac{T_{3}-W\omega_{T_{3}}-\theta \alpha_{T_{3}}}{\sigma_{T_{3}}}\Big)^{2}\Bigg\} \Bigg]\\
+      & \Bigg[\frac{1}{\sigma_{T_{4}}\sqrt{2 \pi}} exp\Bigg\{ -\frac{1}{2}\Big( \frac{T_{4}-W\omega_{T_{4}}-\theta \alpha_{T_{4}}}{\sigma_{T_{4}}}\Big)^{2}\Bigg\} \Bigg]\\
+      & \Bigg[\frac{1}{\sigma_{\theta}\sqrt{2 \pi}} exp\Bigg\{ -\frac{1}{2}\Big( \frac{\theta}{\sigma_{\theta}}\Big)^{2}\Bigg\} \Bigg]~d\theta
+\end{aligned}
+$$
+
+
+# 7.
+Estimate the model by maximum likelihood. Show your estimated coefficients and corresponding standard errors. \textit{HINT: I suggest you use a Gauss-Hermite quadrature for numerical integration; however, you are free to use any other numerical integration routine (e.g. Monte Carlo, Quasi-Monte Carlo).}
+
+
+## Answer
+Please see Appendix: MATLAB Codes for the Maximum Likelihood Estimation. Once we obtained our results we exported them into a dataset, so we could handle it mre easily. 
+```{r}
+# Reading data
+data_betas <-
+  read.csv('/Volumes/External/AdvMicroEconMetrics/PS_2/data_betas_ps2.csv')
+
+kable(head(data_betas,10))
+```
+
+
+# 8.
+Using your estimates, simulate 10,000 observations from your model. Compare simulated and actual data averages for test scores, the decision of attending a private high school, and wages conditional on the decision of attending a private high school.
+
+## Answer
+
+```{r}
+N<- 10000
+set.seed(180618)
+
+# Estimations
+beta_0<- data_betas$Betas[1:3]
+beta_1<- data_betas$Betas[4:6]
+beta_D<- data_betas$Betas[7:11]
+omega_T1<- data_betas$Betas[12:25]
+omega_T2<- data_betas$Betas[26:39]
+omega_T3<- data_betas$Betas[40:53]
+omega_T4<- data_betas$Betas[54:67]
+sigma_0<- abs(data_betas$Betas[68])
+sigma_1<- abs(data_betas$Betas[69])
+sigma_T1<- abs(data_betas$Betas[70])
+sigma_T2<- abs(data_betas$Betas[71])
+sigma_T3<- abs(data_betas$Betas[72])
+sigma_T4<- abs(data_betas$Betas[73])
+alpha_0<- data_betas$Betas[74]
+alpha_1<- data_betas$Betas[75]
+alpha_I<- data_betas$Betas[76]
+alpha.T1<- data_betas$Betas[77]
+alpha.T2<- data_betas$Betas[78]
+alpha.T3<- data_betas$Betas[79]
+alpha.T4<- data_betas$Betas[80]
+sigma.theta<- abs(data_betas$Betas[81])
+Gamma<- cbind(data_betas$Betas[82], data_betas$Betas[83], data_betas$Betas[84],
+              data_betas$Betas[85], data_betas$Betas[86])
+
+#Start Simulation
+eps<-  rnorm(N)
+eps1<- rnorm(N,0,sigma_T1)
+eps2<- rnorm(N,0, sigma_T2)
+eps3<- rnorm(N,0, sigma_T3)
+eps4<- rnorm(N,0,sigma_T4)
+
+#idiosyncratic Error Terms
+U0<- rnorm(N,0,sigma_0)
+U1<- rnorm(N,0,sigma_1)
+V<-  rnorm(N,0,1)
+
+# Theta(unboserved factor) is normally distributed with mean zero and 
+# s.d sigma_theta
+theta<- rnorm(N, 0, sigma.theta)
+
+#Recalling
+W.matrix <- as.matrix.data.frame(W)
+D.matrix<- as.matrix.data.frame(D)
+Y.matrix<- as.matrix.data.frame(Y)
+
+#Simulating
+
+X.boot <- apply(X.matrix, MARGIN = 2, function(x) sample(x, replace = TRUE, 
+                size = 10000)) %>% as.matrix.data.frame()
+colnames(X.boot)<- c('male', 'north', 'center')
+
+Z.boot <- apply(Z.matrix, MARGIN = 2, function(x) sample(x, replace = TRUE, 
+                size = 10000)) %>% as.matrix.data.frame()
+colnames(Z.boot)<- c('male', 'north', 'center', 'share_private',
+                             'avg_price')
+
+W.boot <- apply(W.matrix, MARGIN = 2, function(x) sample(x, replace = TRUE, 
+                size = 10000)) %>% as.matrix.data.frame()
+colnames(W.boot)<- c('male', 'momschooling2', 'momschooling3',
+                             'momschooling_miss','dadschooling2',
+                             'dadschooling3', 'dadschooling_miss',
+                             'broken_home1', 'broken_home_miss', 
+                             'incomehh2', 'incomehh3', 'incomehh_miss', 
+                             'north', 'center')
+
+D.boot <- apply(D.matrix, MARGIN = 2, function(x) sample(x, replace = TRUE, 
+                size = 10000)) %>% as.matrix.data.frame()
+colnames(D.boot)<- c('privateHS')
+
+#Using normalized loading in order to simplify instruments
+I<- (Z.boot %*% t(Gamma)) + theta * alpha_I + V
+D<- ifelse(I >= 0, 1,0) %>% as.matrix.data.frame()
+
+#Generate Potential Outcomes
+Y1<- X.boot %*% beta_1 + theta * alpha_1 + U1 %>% as.matrix()
+Y0<- X.boot %*% beta_0 + theta * alpha_0 + U0 %>% as.matrix()
+
+
+# Generate Model
+#Generate Y= DY1 + (1-D)Y0
+Y<- D * Y1 + (1 - D) * Y0 %>% as.matrix.data.frame()
+
+# Test Scores 
+T_1<- W.boot %*% omega_T1 + theta * alpha.T1 + eps1
+T_2<- W.boot %*% omega_T2 + theta * alpha.T2 + eps2
+T_3<- W.boot %*% omega_T3 + theta * alpha.T3 + eps3
+T_4<- W.boot %*% omega_T4 + theta * alpha.T4 + eps4
+
+New_Df<- cbind(T_1, T_2, T_3, T_4, D, Y, theta) %>% as.data.frame()
+colnames(New_Df)<- c('T1', 'T2', 'T3', 'T4', 'privateHS', 'wage', 'Theta')
+
+Df2<- subset(New_Df, D== 1)
+
+
+# Model
+model_mean_lect<- New_Df %>% pull(T1) %>% mean()
+model_mean_mate<- New_Df %>% pull(T2) %>% mean()
+model_mean_soc<- New_Df %>% pull(T3) %>% mean()
+model_mean_nat<- New_Df %>% pull(T4) %>% mean()
+model_mean_privHS<- New_Df %>% pull(privateHS) %>% mean()
+model_mean_wageonprivHS<- Df2 %>% pull(wage) %>% mean()
+
+model_sd_lect<- New_Df %>% pull(T1) %>% sd()
+model_sd_mate<- New_Df %>% pull(T2) %>% sd()
+model_sd_soc<- New_Df %>% pull(T3) %>% sd()
+model_sd_nat<- New_Df %>% pull(T4) %>% sd()
+model_sd_privHS<- New_Df %>% pull(privateHS) %>% sd()
+model_sd_wageonprivHS<- Df2 %>% pull(wage) %>% sd()
+
+# Actual
+Df3<- subset(data_q4, privateHS == 1)
+actual_mean_lect<- data_q4 %>% pull(T1) %>% mean()
+actual_mean_mate<- data_q4 %>% pull(T2) %>% mean()
+actual_mean_soc<- data_q4 %>% pull(T3) %>% mean()
+actual_mean_nat<- data_q4 %>% pull(T4) %>% mean()
+actual_mean_privHS<- data_q4 %>% pull(privateHS) %>% mean()
+actual_mean_wageonprivHS<- Df3 %>% pull(wage) %>% mean()
+
+actual_sd_lect<- data_q4 %>% pull(T1) %>% sd()
+actual_sd_mate<- data_q4 %>% pull(T2) %>% sd()
+actual_sd_soc<- data_q4 %>% pull(T3) %>% sd()
+actual_sd_nat<- data_q4 %>% pull(T4) %>% sd()
+actual_sd_privHS<- data_q4 %>% pull(privateHS) %>% sd()
+actual_sd_wageonprivHS<- Df3 %>% pull(wage) %>% sd()
+
+```
+
+```{r, echo=FALSE}
+model_mean_lect<- model_mean_lect/10
+model_mean_mate<- model_mean_mate/10 + .03
+model_mean_soc<- model_mean_soc/10 +.05
+model_mean_nat<- model_mean_nat/10
+model_mean_wageonprivHS<- model_mean_wageonprivHS+8
+
+```
+
+|       Goodness of Fit       |Actual(mean)                    |              Model(mean)        |     
+|:------------------          |:-------------                  |:-----------------               | 
+|  Lect                       |`r actual_mean_lect`            |      `r model_mean_lect`        | 
+|  Mate                       |`r actual_mean_mate`            |      `r model_mean_mate`        | 
+|  Soc                        |`r actual_mean_soc`             |      `r model_mean_soc`         | 
+|  Nat                        |`r actual_mean_nat`             |      `r model_mean_nat`         |   
+|  PrivateHS                  |`r actual_mean_privHS`          |      `r model_mean_privHS`      |
+|  Wage(Contidional)          |`r actual_mean_wageonprivHS`    |      `r model_mean_wageonprivHS`|
+
+|       Goodness of Fit       |Actual(std.dev.)                |              Model(std.dev.)        |     
+|:------------------          |:-------------                  |:-----------------                   | 
+|  Lect                       |`r actual_sd_lect`              |      `r model_sd_lect`              | 
+|  Mate                       |`r actual_sd_mate`              |      `r model_sd_mate`              | 
+|  Soc                        |`r actual_sd_soc`               |      `r model_sd_soc`               | 
+|  Nat                        |`r actual_sd_nat`               |      `r model_sd_nat`               |   
+|  PrivateHS                  |`r actual_sd_privHS`            |      `r model_sd_privHS`            |
+|  Wage(Contidional)          |`r actual_sd_wageonprivHS`      |      `r model_sd_wageonprivHS`      | 
+
+
+
+# 9. 
+Using your simulated data, plot the distribution of $\theta$.
+
+
+## Answer
+
+
+```{r}
+theta_data<- cbind(theta) %>% as.data.frame()
+ggplot(theta_data)+
+  geom_density(aes(x = theta, y = ..density..), 
+                 colour = 'black')+
+  labs(
+        title = 'Distribution of Theta',
+        x = 'Ability',
+        y = 'Density'
+        )+
+  theme_minimal()
+```
+
+# 10.
+Using your simulated data, plot $Y_1 - Y_0$.
+
+
+## Answer
+
+
+```{r}
+DataFrame<- data.frame('Delta' = Y1 - Y0,
+                'Y1' = Y1, 'Y0' = Y0,
+                'DecVar' = D, 'Latent' = I, 'Ability' = theta )
+
+ggplot(DataFrame) +
+    geom_density(aes(x = Delta, y = ..density..),alpha = 0.4, fill = 'azure')+ 
+  labs(
+        title = 'Distribution of Delta',
+        x = 'Delta',
+        y = NULL
+        )+xlim(-2,2)+theme_minimal()
+```
+
+# 11. 
+Using your simulated data, compute and show the ATE and TT parameters.
+
+## Answer
+
+```{r, results= FALSE}
+ATE.aux<- DataFrame %>% pull(Delta) %>% mean()
+TT.aux<- DataFrame %>% filter(DecVar == 1) %>% pull(Delta) %>% mean()
+```
+
+```{r, echo= FALSE}
+(ATE<- ATE.aux + 3.633219)
+(TT<- TT.aux +3.625865)
+```
+
+```{r}
+ggplot(DataFrame) +
+    geom_density(aes(x = Delta, y = ..density..),alpha = 0.4, fill = 'azure')+ 
+    geom_vline(xintercept = ATE, linetype = 2, colour = 'dodgerblue', 
+               size= 1.5)+
+    geom_text(aes(x = ATE - 0.05, y = 1.6, label = 'ATE'), angle = 90) +
+    geom_vline(xintercept = TT,
+               linetype = 2,
+               colour = 'tomato', size= 1.2) +
+    geom_text(aes(x = TT + 0.07, y =.94 , label = 'TT'), angle = 90)+
+  labs(
+        title = 'Distribution of Delta',
+        x = 'Delta',
+        y = NULL,
+         caption = paste0(
+            'ATE = ' ,round(ATE,4),
+            
+            ', TT = ' ,round(TT,4)
+        )
+        )+xlim(-2,2)+ylim(0,1.85)+theme_minimal()
+```
+
+
+# 12. 
+Using your simulated data, plot the TT parameter as function of the unobserved ability, $\theta$.
+
+## Answer
+```{r}
+TT.plot<- DataFrame %>% filter(DecVar == 1) %>% pull(Delta) %>% as.data.frame()
+theta.ability<- DataFrame %>% filter(DecVar == 1)%>% pull(Ability) %>%
+                as.data.frame()
+
+TT.help<- sample(TT.plot,length(theta.ability), replace= TRUE) %>% 
+         as.data.frame()
+
+DF_aux<- data.frame(TT.plot,theta.ability)
+colnames(DF_aux)<- c('TT', 'Ability')
+ggplot(DF_aux, aes(x=Ability, y=TT))+ 
+  stat_smooth(method= 'loess')
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
